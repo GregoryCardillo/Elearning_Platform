@@ -117,3 +117,6 @@ MEDIA_ROOT = BASE_DIR / 'media'
 # Static files 
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# Custom user model
+AUTH_USER_MODEL = 'courses.User'
