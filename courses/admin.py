@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Course, Module, Lesson
+from .models import User, Course, Module, Lesson, Enrollment, Progress
 
 # Register your models here.
 @admin.register(User)
@@ -117,3 +117,59 @@ class LessonAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+
+class ProgressInline(admin.TabularInline):
+    """
+    Inline to show progress records within enrollment.
+    """
+    model = Progress
+    extra = 0
+    readonly_fields = ('lesson', 'completed', 'completed_at', 'last_accessed')
+    can_delete = False
+
+    def has_add_permission(self, request, obj=None):
+        # Don't allow manual addition (created automatically via signals)
+        return False
+    
+@admin.register(Enrollment)
+class EnrollmentAdmin(admin.ModelAdmin):
+    list_display = ('student', 'course', 'enrolled_at', 'progress_percentage', 'is_completed', 'is_active')
+    list_filter = ('is_active', 'enrolled_at', 'completed_at')
+    search_fields = ('student__email', 'course__title')
+    readonly_fields = ('enrolled_at', 'progress_percentage', 'is_completed')
+    inlines = [ProgressInline]
+    
+    fieldsets = (
+        ('Enrollment Details', {
+            'fields': ('student', 'course', 'is_active')
+        }),
+        ('Progress', {
+            'fields': ('enrolled_at', 'completed_at', 'progress_percentage', 'is_completed')
+        }),
+    )
+
+    def get_queryset(self, request):
+        """Optimize query."""
+        qs = super().get_queryset(request)
+        return qs.select_related('student', 'course')
+
+@admin.register(Progress)
+class ProgressAdmin(admin.ModelAdmin):
+    list_display = ('enrollment', 'lesson', 'completed', 'completed_at', 'last_accessed')
+    list_filter = ('completed', 'completed_at')
+    search_fields = ('enrollment__student__email', 'lesson__title')
+    readonly_fields = ('completed_at', 'last_accessed')
+    
+    fieldsets = (
+        ('Progress Details', {
+            'fields': ('enrollment', 'lesson', 'completed')
+        }),
+        ('Timestamps', {
+            'fields': ('completed_at', 'last_accessed')
+        }),
+    )
+    
+    def get_queryset(self, request):
+        """Optimize query."""
+        qs = super().get_queryset(request)
+        return qs.select_related('enrollment__student', 'enrollment__course', 'lesson')
