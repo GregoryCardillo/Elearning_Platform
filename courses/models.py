@@ -191,3 +191,96 @@ class Lesson(models.Model):
 
     def __str__(self):
         return f"{self.module.title} - {self.title}"
+    
+class Enrollment(models.Model):
+    """
+    Represents a student's enrollment in a course.
+    """
+
+    student = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='enrollments',
+        limit_choices_to={'role': 'student'}
+    )
+    course = models.ForeignKey(
+        Course,
+        on_delete=models.CASCADE,
+        related_name='enrollments'
+    )
+    enrolled_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = 'Enrollment'
+        verbose_name_plural = 'Enrollments'
+        unique_together = ['student', 'course']  # A student can only enroll in a course once
+        ordering = ['-enrolled_at']
+        indexes = [
+            models.Index(fields=['student', 'course']),
+            models.Index(fields=['is_active'])
+        ]
+    
+    def __str__(self):
+        return f"{self.student.email} enrolled in {self.course.title}"
+
+    @property
+    def progress_percentage(self):
+        """Calculate completion percentage for this enrollment."""
+        total_lessons = self.course.total_lessons
+        if total_lessons == 0:
+            return 0
+        
+        completed_lessons = self.progress_records.filter(completed=True).count()
+        return round((completed_lessons / total_lessons) * 100, 2)
+    
+    @property
+    def is_completed(self):
+        """Check if all lessons are completed."""
+        return self.progress_percentage == 100
+    
+class Progress(models.Model):
+    """
+    Tracks a student's progress on individual lessons.
+    """
+
+    enrollment = models.ForeignKey(
+        Enrollment,
+        on_delete=models.CASCADE,
+        related_name='progress_records'
+    )
+    lesson = models.ForeignKey(
+        Lesson,
+        on_delete=models.CASCADE,
+        related_name='progress_records'
+    )
+    completed = models.BooleanField(default=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    last_accessed = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Progress'
+        verbose_name_plural = 'Progress Records'
+        unique_together = ['enrollment', 'lesson']
+        ordering = ['lesson__order']
+        indexes = [
+            models.Index(fields=['enrollment', 'completed']),
+        ]
+
+    def __str__(self):
+        status = "✓" if self.completed else "○"
+        return f"{status} {self.enrollment.student.email} - {self.lesson.title}"
+    
+    def mark_complete(self):
+        """Mark this lesson as completed."""
+        if not self.completed:
+            self.completed = True
+            self.completed_at = timezone.now()
+            self.save()
+            
+            # Check if course is now complete
+            enrollment = self.enrollment
+            if enrollment.is_completed and not enrollment.completed_at:
+                enrollment.completed_at = timezone.now()
+                enrollment.save()
