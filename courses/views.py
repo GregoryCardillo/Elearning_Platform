@@ -375,3 +375,90 @@ def verify_token(request):
         'error': 'Invalid or expired token.'
     }, status=status.HTTP_401_UNAUTHORIZED)
 
+
+# ============================================
+# INSTRUCTOR VIEWS
+# ============================================
+
+class InstructorCourseListView(generics.ListAPIView):
+    """
+    GET /api/instructor/courses/  → List courses created by the current instructor
+    """
+    serializer_class = CourseListSerializer
+    permission_classes = [IsAuthenticated, IsInstructor]
+    
+    def get_queryset(self):
+        """Return only courses created by the current instructor."""
+        return Course.objects.filter(
+            instructor=self.request.user
+        ).select_related(
+            'instructor'
+        ).prefetch_related(
+            'modules__lessons',
+            'enrollments'
+        )
+
+
+class CourseStudentsView(generics.ListAPIView):
+    """
+    GET /api/courses/{slug}/students/  → List students enrolled in a course (instructor only)
+    """
+    serializer_class = EnrollmentSerializer
+    permission_classes = [IsAuthenticated, IsInstructor]
+    
+    def get_queryset(self):
+        """Get students enrolled in the instructor's course."""
+        from .models import Enrollment
+        
+        course = get_object_or_404(
+            Course,
+            slug=self.kwargs['slug'],
+            instructor=self.request.user  # Ensure ownership
+        )
+        
+        return Enrollment.objects.filter(
+            course=course,
+            is_active=True
+        ).select_related(
+            'student',
+            'course'
+        ).prefetch_related(
+            'progress_records'
+        )
+
+
+class ModuleCreateView(generics.CreateAPIView):
+    """
+    POST /api/courses/{slug}/modules/create/  → Create a module in a course
+    """
+    from .serializers import ModuleSerializer
+    serializer_class = ModuleSerializer
+    permission_classes = [IsAuthenticated, IsInstructor]
+    
+    def perform_create(self, serializer):
+        """Automatically assign course from URL."""
+        course = get_object_or_404(
+            Course,
+            slug=self.kwargs['slug'],
+            instructor=self.request.user  # Ensure ownership
+        )
+        serializer.save(course=course)
+
+
+class LessonCreateView(generics.CreateAPIView):
+    """
+    POST /api/modules/{module_id}/lessons/create/  → Create a lesson in a module
+    """
+    serializer_class = LessonSerializer
+    permission_classes = [IsAuthenticated, IsInstructor]
+    
+    def perform_create(self, serializer):
+        """Automatically assign module from URL."""
+        module = get_object_or_404(Module, id=self.kwargs['module_id'])
+        
+        # Check if user is the course instructor
+        if module.course.instructor != self.request.user:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("You can only add lessons to your own courses.")
+        
+        serializer.save(module=module)
