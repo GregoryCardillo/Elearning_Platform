@@ -1,24 +1,26 @@
-from rest_framework import serializers 
+from rest_framework import serializers
 from .models import User, Course, Module, Lesson, Enrollment, Progress
 
-# ==========================================
+
+# ============================================
 # USER SERIALIZERS
-# ==========================================
+# ============================================
 
 class UserPublicSerializer(serializers.ModelSerializer):
     """
-    Public user info (shown to other users)
+    Public user info (shown to other users).
     """
     full_name = serializers.SerializerMethodField()
-
+    
     class Meta:
         model = User
-        fields = ['id', 'email', 'first_name', 'last_name', 'full_name', 'role', 'bio', 'profile_picture']
+        fields = ('id', 'email', 'first_name', 'last_name', 'full_name', 'role', 'bio', 'profile_picture')
         read_only_fields = ('id', 'email', 'role')
-
+    
     def get_full_name(self, obj):
         return obj.get_full_name()
-    
+
+
 class UserProfileSerializer(serializers.ModelSerializer):
     """
     Detailed user profile (shown to the user themselves).
@@ -26,7 +28,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
     total_enrollments = serializers.SerializerMethodField()
     total_courses_created = serializers.SerializerMethodField()
-
+    
     class Meta:
         model = User
         fields = (
@@ -35,7 +37,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'total_enrollments', 'total_courses_created'
         )
         read_only_fields = ('id', 'email', 'role', 'date_joined')
-
+    
     def get_full_name(self, obj):
         return obj.get_full_name()
     
@@ -47,22 +49,10 @@ class UserProfileSerializer(serializers.ModelSerializer):
         """Total courses created (for instructors)."""
         return obj.courses_created.count() if obj.is_instructor else None
 
-# ============================================
-# LESSON SERIALIZERS
-# ============================================
 
-class LessonSerializer(serializers.ModelSerializer):
-    """
-    Lesson serializer with full details.
-    """
-
-    class Meta:
-        model = Lesson
-        fields = (
-            'id', 'title', 'content_type', 'content',
-            'video_url', 'duration_minutes', 'order', 'is_free'
-        )
-        read_only_fields = ('id',)
+# ============================================
+# LESSON SERIALIZERS (BEFORE MODULE!)
+# ============================================
 
 class LessonListSerializer(serializers.ModelSerializer):
     """
@@ -74,9 +64,76 @@ class LessonListSerializer(serializers.ModelSerializer):
         fields = ('id', 'title', 'content_type', 'duration_minutes', 'order', 'is_free')
         read_only_fields = ('id',)
 
+
+class LessonSerializer(serializers.ModelSerializer):
+    """
+    Lesson serializer with full details.
+    """
+    
+    class Meta:
+        model = Lesson
+        fields = (
+            'id', 'title', 'content_type', 'content',
+            'video_url', 'attachments', 'duration_minutes', 'order', 'is_free'
+        )
+        read_only_fields = ('id',)
+    
+    def validate_order(self, value):
+        """Ensure order is not negative."""
+        if value < 0:
+            raise serializers.ValidationError("Order cannot be negative.")
+        return value
+    
+    def validate_duration_minutes(self, value):
+        """Ensure duration is not negative."""
+        if value < 0:
+            raise serializers.ValidationError("Duration cannot be negative.")
+        return value
+    
+    def validate_title(self, value):
+        """Ensure title is not too short."""
+        if len(value) < 3:
+            raise serializers.ValidationError("Title must be at least 3 characters long.")
+        return value
+    
+    def validate(self, attrs):
+        """
+        Cross-field validation.
+        - If content_type is 'video', video_url should be provided
+        - If content_type is 'article', content should be provided
+        """
+        content_type = attrs.get('content_type')
+        video_url = attrs.get('video_url')
+        content = attrs.get('content')
+        
+        if content_type == 'video' and not video_url:
+            raise serializers.ValidationError({
+                'video_url': 'Video URL is required for video lessons.'
+            })
+        
+        if content_type == 'article' and not content:
+            raise serializers.ValidationError({
+                'content': 'Content is required for article lessons.'
+            })
+        
+        return attrs
+
+
 # ============================================
-# MODULE SERIALIZERS
+# MODULE SERIALIZERS (AFTER LESSON!)
 # ============================================
+
+class ModuleListSerializer(serializers.ModelSerializer):
+    """
+    Module serializer for list views (without lessons).
+    """
+    total_lessons = serializers.ReadOnlyField()
+    
+    class Meta:
+        model = Module
+        fields = ('id', 'title', 'description', 'order', 'total_lessons')
+        read_only_fields = ('id',)
+
 
 class ModuleSerializer(serializers.ModelSerializer):
     """
@@ -84,21 +141,18 @@ class ModuleSerializer(serializers.ModelSerializer):
     """
     lessons = LessonListSerializer(many=True, read_only=True)
     total_lessons = serializers.ReadOnlyField()
-
+    
     class Meta:
         model = Module
         fields = ('id', 'title', 'description', 'order', 'total_lessons', 'lessons')
         read_only_fields = ('id',)
+    
+    def validate_order(self, value):
+        """Ensure order is not negative."""
+        if value < 0:
+            raise serializers.ValidationError("Order cannot be negative.")
+        return value
 
-class ModuleListSerializer(serializers.ModelSerializer):
-    """
-    Module serializer for list  views (without lessons).
-    """
-
-    class Meta:
-        model = Module
-        fields = ('id', 'title', 'description', 'order', 'total_lessons')
-        read_only_fields = ('id',)
 
 # ============================================
 # COURSE SERIALIZERS
@@ -108,12 +162,11 @@ class CourseListSerializer(serializers.ModelSerializer):
     """
     Course serializer for list views (lightweight).
     """
-
     instructor = UserPublicSerializer(read_only=True)
     total_modules = serializers.ReadOnlyField()
     total_lessons = serializers.ReadOnlyField()
     total_duration = serializers.ReadOnlyField()
-
+    
     class Meta:
         model = Course
         fields = (
@@ -124,10 +177,6 @@ class CourseListSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ('id', 'slug', 'created_at')
 
-class CourseDetailSerializer(serializers.ModelSerializer):
-    """
-    Course serializer for detail views (with nested modules and lessons)
-    """
 
 class CourseDetailSerializer(serializers.ModelSerializer):
     """
@@ -140,7 +189,7 @@ class CourseDetailSerializer(serializers.ModelSerializer):
     total_duration = serializers.ReadOnlyField()
     total_enrollments = serializers.SerializerMethodField()
     is_enrolled = serializers.SerializerMethodField()
-
+    
     class Meta:
         model = Course
         fields = (
@@ -150,7 +199,7 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             'total_enrollments', 'is_enrolled', 'created_at', 'updated_at'
         )
         read_only_fields = ('id', 'slug', 'created_at', 'updated_at')
-
+    
     def get_total_enrollments(self, obj):
         """Total number of students enrolled."""
         return obj.enrollments.filter(is_active=True).count()
@@ -165,18 +214,19 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             ).exists()
         return False
 
+
 class CourseWriteSerializer(serializers.ModelSerializer):
     """
-    Course serializer for create/update operations
+    Course serializer for create/update operations.
     """
-
+    
     class Meta:
         model = Course
         fields = (
             'title', 'slug', 'description', 'thumbnail',
             'level', 'status', 'price'
         )
-
+    
     def validate_price(self, value):
         """Ensure price is not negative."""
         if value < 0:
@@ -193,32 +243,13 @@ class CourseWriteSerializer(serializers.ModelSerializer):
         """Automatically assign instructor from request user."""
         request = self.context.get('request')
         validated_data['instructor'] = request.user
-
-    # Auto-generate slug from title
+        
+        # Auto-generate slug from title
         from django.utils.text import slugify
         validated_data['slug'] = slugify(validated_data['title'])
         
         return super().create(validated_data)
-    
-# ============================================
-# ENROLLMENT SERIALIZERS
-# ============================================
 
-class EnrollmentSerializer(serializers.ModelSerializer):
-    """
-    Enrollment serializer with course info.
-    """
-    course = CourseListSerializer(read_only=True)
-    progress_percentage = serializers.ReadOnlyField()
-    is_completed = serializers.ReadOnlyField()
-
-    class Meta:
-        model = Enrollment
-        fields = (
-            'id', 'course', 'enrolled_at', 'completed_at',
-            'progress_percentage', 'is_completed', 'is_active'
-        )
-        read_only_fields = ('id', 'enrolled_at', 'completed_at', 'is_active')
 
 # ============================================
 # PROGRESS SERIALIZERS
@@ -234,6 +265,88 @@ class ProgressSerializer(serializers.ModelSerializer):
         model = Progress
         fields = ('id', 'lesson', 'completed', 'completed_at', 'last_accessed')
         read_only_fields = ('id', 'completed_at', 'last_accessed')
+
+
+# ============================================
+# ENROLLMENT SERIALIZERS
+# ============================================
+
+class EnrollmentSerializer(serializers.ModelSerializer):
+    """
+    Enrollment serializer with course info and progress details.
+    """
+    course = CourseListSerializer(read_only=True)
+    progress_percentage = serializers.ReadOnlyField()
+    is_completed = serializers.ReadOnlyField()
+    next_lesson = serializers.SerializerMethodField()
+    completed_lessons_count = serializers.SerializerMethodField()
+    total_lessons = serializers.SerializerMethodField()
+    total_time_spent = serializers.SerializerMethodField()
+    estimated_completion_date = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Enrollment
+        fields = (
+            'id', 'course', 'enrolled_at', 'completed_at',
+            'progress_percentage', 'is_completed', 'is_active',
+            'next_lesson', 'completed_lessons_count', 'total_lessons',
+            'total_time_spent', 'estimated_completion_date'
+        )
+        read_only_fields = ('id', 'enrolled_at', 'completed_at', 'is_active')
+    
+    def get_next_lesson(self, obj):
+        """Get the next incomplete lesson."""
+        next_lesson = obj.get_next_lesson()
+        if next_lesson:
+            return {
+                'id': next_lesson.id,
+                'title': next_lesson.title,
+                'module': next_lesson.module.title,
+                'order': next_lesson.order
+            }
+        return None
+    
+    def get_completed_lessons_count(self, obj):
+        """Get count of completed lessons."""
+        return obj.get_completed_lessons_count()
+    
+    def get_total_lessons(self, obj):
+        """Get total lessons in the course."""
+        return obj.course.total_lessons
+    
+    def get_total_time_spent(self, obj):
+        """Get total time spent in minutes."""
+        return obj.get_total_time_spent()
+    
+    def get_estimated_completion_date(self, obj):
+        """Get estimated completion date."""
+        estimated_date = obj.calculate_estimated_completion_date()
+        return estimated_date.isoformat() if estimated_date else None
+
+
+class EnrollmentDetailSerializer(EnrollmentSerializer):
+    """
+    Detailed enrollment serializer with full course details.
+    """
+    course = CourseDetailSerializer(read_only=True)
+    recent_progress = serializers.SerializerMethodField()
+    
+    class Meta(EnrollmentSerializer.Meta):
+        fields = EnrollmentSerializer.Meta.fields + ('recent_progress',)
+    
+    def get_recent_progress(self, obj):
+        """Get 5 most recently accessed lessons."""
+        recent = obj.progress_records.select_related(
+            'lesson__module'
+        ).order_by('-last_accessed')[:5]
+        
+        return [{
+            'lesson_id': p.lesson.id,
+            'lesson_title': p.lesson.title,
+            'module': p.lesson.module.title,
+            'completed': p.completed,
+            'last_accessed': p.last_accessed.isoformat() if p.last_accessed else None
+        } for p in recent]
 
 
 # ============================================

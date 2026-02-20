@@ -14,6 +14,7 @@ from .serializers import (
     ModuleSerializer,
     LessonSerializer,
     EnrollmentSerializer,
+    EnrollmentDetailSerializer,  
     ProgressSerializer,
     UserProfileSerializer,
     RegisterSerializer,
@@ -462,3 +463,226 @@ class LessonCreateView(generics.CreateAPIView):
             raise PermissionDenied("You can only add lessons to your own courses.")
         
         serializer.save(module=module)
+
+# ============================================
+# STUDENT DASHBOARD VIEWS
+# ============================================
+
+class StudentDashboardView(generics.GenericAPIView):
+    """
+    GET /api/student/dashboard/  → Get student dashboard with stats
+    """
+    permission_classes = [IsAuthenticated, IsStudent]
+    
+    def get(self, request):
+        """Return student statistics and enrollments."""
+        student = request.user
+        
+        # Get all enrollments
+        enrollments = Enrollment.objects.filter(
+            student=student,
+            is_active=True
+        ).select_related('course__instructor').prefetch_related('progress_records')
+        
+        # Separate active and completed
+        active_enrollments = enrollments.filter(completed_at__isnull=True)
+        completed_enrollments = enrollments.filter(completed_at__isnull=False)
+        
+        # Calculate overall stats
+        total_courses = enrollments.count()
+        completed_courses = completed_enrollments.count()
+        total_lessons_completed = sum(
+            e.get_completed_lessons_count() for e in enrollments
+        )
+        total_time_spent = sum(
+            e.get_total_time_spent() for e in enrollments
+        )
+        
+        # Serialize enrollments
+        active_data = EnrollmentSerializer(active_enrollments, many=True).data
+        completed_data = EnrollmentSerializer(completed_enrollments, many=True).data
+        
+        return Response({
+            'stats': {
+                'total_courses': total_courses,
+                'active_courses': active_enrollments.count(),
+                'completed_courses': completed_courses,
+                'total_lessons_completed': total_lessons_completed,
+                'total_time_spent_minutes': total_time_spent,
+                'total_time_spent_hours': round(total_time_spent / 60, 1)
+            },
+            'active_enrollments': active_data,
+            'completed_enrollments': completed_data
+        })
+
+
+class EnrollmentDetailView(generics.RetrieveAPIView):
+    """
+    GET /api/enrollments/{id}/  → Get detailed enrollment info
+    """
+    serializer_class = EnrollmentDetailSerializer
+    permission_classes = [IsAuthenticated, IsEnrollmentOwner]
+    
+    def get_queryset(self):
+        return Enrollment.objects.filter(
+            student=self.request.user
+        ).select_related(
+            'course__instructor'
+        ).prefetch_related(
+            'course__modules__lessons',
+            'progress_records__lesson__module'
+        )
+
+
+@api_view(['POST'])
+def unenroll_from_course(request, enrollment_id):
+    """
+    POST /api/enrollments/{enrollment_id}/unenroll/  → Unenroll from a course
+    """
+    enrollment = get_object_or_404(
+        Enrollment,
+        id=enrollment_id,
+        student=request.user,
+        is_active=True
+    )
+    
+    # Don't allow unenrollment if course is completed
+    if enrollment.is_completed:
+        return Response(
+            {'error': 'Cannot unenroll from a completed course.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Deactivate enrollment instead of deleting (keep history)
+    enrollment.is_active = False
+    enrollment.save()
+    
+    return Response({
+        'message': 'Successfully unenrolled from the course.',
+        'enrollment_id': enrollment.id
+    })
+
+
+@api_view(['GET'])
+def enrollment_certificate(request, enrollment_id):
+    """
+    GET /api/enrollments/{enrollment_id}/certificate/  → Get certificate info
+    """
+    enrollment = get_object_or_404(
+        Enrollment,
+        id=enrollment_id,
+        student=request.user
+    )
+    
+    if not enrollment.is_completed:
+        return Response(
+            {'error': 'Course must be completed to receive a certificate.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Generate certificate data
+    certificate_data = {
+        'student_name': request.user.get_full_name() or request.user.email,
+        'course_title': enrollment.course.title,
+        'instructor_name': enrollment.course.instructor.get_full_name(),
+        'completion_date': enrollment.completed_at.strftime('%B %d, %Y'),
+        'enrollment_id': enrollment.id,
+        'certificate_number': f"CERT-{enrollment.id:06d}",
+        'total_lessons': enrollment.course.total_lessons,
+        'total_duration': enrollment.course.total_duration
+    }
+    
+    return Response({
+        'message': 'Certificate generated successfully!',
+        'certificate': certificate_data
+    })
+
+
+# ============================================
+# PROGRESS TRACKING VIEWS
+# ============================================
+
+@api_view(['POST'])
+def reset_lesson_progress(request, enrollment_id, lesson_id):
+    """
+    POST /api/enrollments/{enrollment_id}/lessons/{lesson_id}/reset/
+    → Reset a lesson to incomplete
+    """
+    enrollment = get_object_or_404(
+        Enrollment,
+        id=enrollment_id,
+        student=request.user
+    )
+    
+    progress = get_object_or_404(
+        Progress,
+        enrollment=enrollment,
+        lesson_id=lesson_id
+    )
+    
+    progress.completed = False
+    progress.completed_at = None
+    progress.save()
+    
+    # Update enrollment completion status if needed
+    if enrollment.completed_at:
+        enrollment.completed_at = None
+        enrollment.save()
+    
+    return Response({
+        'message': 'Lesson progress reset successfully!',
+        'progress': ProgressSerializer(progress).data,
+        'course_progress': f"{enrollment.progress_percentage}%"
+    })
+
+
+class CourseProgressSummaryView(generics.GenericAPIView):
+    """
+    GET /api/courses/{slug}/progress/  → Get progress summary for enrolled course
+    """
+    permission_classes = [IsAuthenticated, IsStudent]
+    
+    def get(self, request, slug):
+        """Get detailed progress for a course."""
+        course = get_object_or_404(Course, slug=slug)
+        
+        enrollment = get_object_or_404(
+            Enrollment,
+            student=request.user,
+            course=course,
+            is_active=True
+        )
+        
+        # Get progress grouped by module
+        modules_progress = []
+        
+        for module in course.modules.all().prefetch_related('lessons'):
+            lessons_in_module = module.lessons.all()
+            progress_records = Progress.objects.filter(
+                enrollment=enrollment,
+                lesson__in=lessons_in_module
+            ).select_related('lesson')
+            
+            completed_count = progress_records.filter(completed=True).count()
+            total_count = lessons_in_module.count()
+            percentage = (completed_count / total_count * 100) if total_count > 0 else 0
+            
+            modules_progress.append({
+                'module_id': module.id,
+                'module_title': module.title,
+                'total_lessons': total_count,
+                'completed_lessons': completed_count,
+                'progress_percentage': round(percentage, 2),
+                'lessons': [{
+                    'id': p.lesson.id,
+                    'title': p.lesson.title,
+                    'completed': p.completed,
+                    'completed_at': p.completed_at.isoformat() if p.completed_at else None,
+                    'order': p.lesson.order
+                } for p in progress_records]
+            })
+        
+        return Response({
+            'enrollment': EnrollmentDetailSerializer(enrollment).data,
+            'modules_progress': modules_progress
+        })

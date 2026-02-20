@@ -239,6 +239,62 @@ class Enrollment(models.Model):
     def is_completed(self):
         """Check if all lessons are completed."""
         return self.progress_percentage == 100
+    def get_next_lesson(self):
+        """Get the next incomplete lesson."""
+        incomplete_progress = self.progress_records.filter(
+            completed=False
+        ).select_related('lesson').order_by('lesson__module__order', 'lesson__order').first()
+        
+        return incomplete_progress.lesson if incomplete_progress else None
+    
+    def get_completed_lessons_count(self):
+        """Get count of completed lessons."""
+        return self.progress_records.filter(completed=True).count()
+    
+    def get_total_time_spent(self):
+        """Calculate total time spent on completed lessons."""
+        completed_lessons = self.progress_records.filter(
+            completed=True
+        ).select_related('lesson')
+        
+        total_minutes = sum(
+            progress.lesson.duration_minutes 
+            for progress in completed_lessons 
+            if progress.lesson.duration_minutes
+        )
+        
+        return total_minutes
+    
+    def calculate_estimated_completion_date(self):
+        """
+        Estimate completion date based on current progress rate.
+        Returns None if not enough data.
+        """
+        from datetime import timedelta
+        from django.utils import timezone
+        
+        if not self.enrolled_at:
+            return None
+        
+        completed_count = self.get_completed_lessons_count()
+        total_lessons = self.course.total_lessons
+        
+        if completed_count == 0 or total_lessons == 0:
+            return None
+        
+        # Calculate days since enrollment
+        days_enrolled = (timezone.now() - self.enrolled_at).days
+        if days_enrolled == 0:
+            days_enrolled = 1  # Avoid division by zero
+        
+        # Calculate average lessons per day
+        lessons_per_day = completed_count / days_enrolled
+        
+        # Calculate remaining lessons and estimated days
+        remaining_lessons = total_lessons - completed_count
+        estimated_days = remaining_lessons / lessons_per_day if lessons_per_day > 0 else 0
+        
+        return timezone.now() + timedelta(days=estimated_days)
     
 class Progress(models.Model):
     """
