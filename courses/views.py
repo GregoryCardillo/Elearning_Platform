@@ -1,7 +1,9 @@
 from rest_framework import generics, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly
+from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly, AllowAny
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from django.shortcuts import get_object_or_404
 
 from .models import Course, Module, Lesson, Enrollment, Progress
@@ -14,6 +16,9 @@ from .serializers import (
     EnrollmentSerializer,
     ProgressSerializer,
     UserProfileSerializer,
+    RegisterSerializer,
+    LoginSerializer,
+    ChangePasswordSerializer,
 )
 
 
@@ -236,3 +241,127 @@ def complete_lesson(request, enrollment_id, lesson_id):
         'progress': serializer.data,
         'course_progress': f"{enrollment.progress_percentage}%"
     })
+
+# ============================================
+# AUTHENTICATION VIEWS
+# ============================================
+
+class RegisterView(generics.CreateAPIView):
+    """
+    POST /api/auth/register/  → Register a new user
+    """
+    serializer_class = RegisterSerializer
+    permission_classes = [AllowAny]
+    
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        
+        # Generate tokens for the new user
+        refresh = RefreshToken.for_user(user)
+        
+        return Response({
+            'user': UserProfileSerializer(user).data,
+            'tokens': {
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+            },
+            'message': 'Registration successful!'
+        }, status=status.HTTP_201_CREATED)
+
+
+class LoginView(generics.GenericAPIView):
+    """
+    POST /api/auth/login/  → Login and get tokens
+    """
+    serializer_class = LoginSerializer
+    permission_classes = [AllowAny]
+    
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        user = serializer.validated_data['user']
+        
+        # Generate tokens
+        refresh = RefreshToken.for_user(user)
+        
+        return Response({
+            'user': UserProfileSerializer(user).data,
+            'tokens': {
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+            },
+            'message': 'Login successful!'
+        })
+
+
+class LogoutView(generics.GenericAPIView):
+    """
+    POST /api/auth/logout/  → Logout (blacklist refresh token)
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        try:
+            refresh_token = request.data.get('refresh')
+            
+            if not refresh_token:
+                return Response(
+                    {'error': 'Refresh token is required.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            token = RefreshToken(refresh_token)
+            token.blacklist()
+            
+            return Response({
+                'message': 'Logout successful!'
+            }, status=status.HTTP_205_RESET_CONTENT)
+        
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+
+class ChangePasswordView(generics.UpdateAPIView):
+    """
+    PUT /api/auth/change-password/  → Change user password
+    """
+    serializer_class = ChangePasswordSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_object(self):
+        return self.request.user
+    
+    def update(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        user = self.get_object()
+        user.set_password(serializer.validated_data['new_password'])
+        user.save()
+        
+        return Response({
+            'message': 'Password changed successfully!'
+        })
+
+
+@api_view(['GET'])
+def verify_token(request):
+    """
+    GET /api/auth/verify/  → Verify if token is valid
+    """
+    if request.user.is_authenticated:
+        return Response({
+            'valid': True,
+            'user': UserProfileSerializer(request.user).data
+        })
+    return Response({
+        'valid': False,
+        'error': 'Invalid or expired token.'
+    }, status=status.HTTP_401_UNAUTHORIZED)
+
