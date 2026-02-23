@@ -81,6 +81,36 @@ class IsCourseInstructor(permissions.BasePermission):
     
     message = "Only the course instructor can perform this action."
 
+class IsCourseInstructorOrReadOnly(permissions.BasePermission):
+    """
+    Permission to allow anyone to read, but only course instructor to edit/delete.
+    """
+    
+    def has_permission(self, request, view):
+        """Allow read permissions for all, others need authentication."""
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return request.user and request.user.is_authenticated
+    
+    def has_object_permission(self, request, view, obj):
+        """Allow read for all, write only for course instructor."""
+        # Read permissions allowed for all
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        
+        # Write permissions only for course instructor
+        if hasattr(obj, 'instructor'):
+            return obj.instructor == request.user
+        
+        if hasattr(obj, 'course'):
+            return obj.course.instructor == request.user
+        
+        if hasattr(obj, 'module'):
+            return obj.module.course.instructor == request.user
+        
+        return False
+    
+    message = "Only the course instructor can modify this."
 
 class IsEnrolled(permissions.BasePermission):
     """

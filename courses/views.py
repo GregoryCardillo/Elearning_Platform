@@ -33,6 +33,7 @@ from .permissions import (
     IsStudent,
     IsOwnerOrReadOnly,
     IsCourseInstructor,
+    IsCourseInstructorOrReadOnly,
     IsEnrolled,
     IsEnrolledOrFree,
     IsEnrollmentOwner,
@@ -176,7 +177,7 @@ class CourseDetailView(generics.RetrieveUpdateDestroyAPIView):
     PUT    /api/courses/{slug}/  → Update course (owner only)
     DELETE /api/courses/{slug}/  → Delete course (owner only)
     """
-    permission_classes = [IsAuthenticatedOrReadOnly, IsCourseInstructor]
+    permission_classes = [IsCourseInstructorOrReadOnly]
     lookup_field = 'slug'
     
     def get_queryset(self):

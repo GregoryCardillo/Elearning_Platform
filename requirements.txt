@@ -1,0 +1,39 @@
+# Core Django
+Django==5.0.1
+djangorestframework==3.14.0
+
+# Database
+psycopg2-binary==2.9.9
+
+# Authentication
+djangorestframework-simplejwt==5.3.1
+
+# API Documentation
+drf-spectacular==0.27.0
+
+# Filtering and Search
+django-filter==23.5
+
+# Environment Configuration
+python-decouple==3.8
+
+# Image Processing
+Pillow==10.2.0
+
+# CORS Headers (for frontend integration)
+django-cors-headers==4.3.1
+
+# Testing
+pytest==7.4.4
+pytest-django==4.7.0
+pytest-cov==4.1.0
+factory-boy==3.3.0
+Faker==22.0.0
+
+# Code Quality (optional, but recommended)
+flake8==7.0.0
+black==24.1.1
+
+# Production Server (optional, for deployment)
+gunicorn==21.2.0
+whitenoise==6.6.0

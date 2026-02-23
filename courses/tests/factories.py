@@ -41,12 +41,13 @@ class CourseFactory(DjangoModelFactory):
         model = Course
     
     title = factory.Faker('sentence', nb_words=4)
-    slug = factory.LazyAttribute(lambda obj: obj.title.lower().replace(' ', '-'))
+    slug = factory.LazyAttribute(lambda obj: obj.title.lower().replace(' ', '-').replace('.', ''))
     description = factory.Faker('paragraph')
     instructor = factory.SubFactory(InstructorFactory)
     level = 'beginner'
     status = 'published'
     price = factory.Faker('pydecimal', left_digits=3, right_digits=2, positive=True, max_value=999)
+
 
 
 class ModuleFactory(DjangoModelFactory):
